@@ -1,0 +1,13 @@
+{
+  "language": "es",
+  "workspace": "./laboratorios",
+  "mcp": {
+    "enabled": false,
+    "command": "uvx",
+    "args": ["--from", "packet-tracer-mcp[ui]", "packet-tracer-mcp", "--stdio"],
+    "env": {},
+    "connect_timeout_seconds": 30
+  },
+  "capture": {"enabled": true, "fallback_screenshot": true},
+  "ocr": {"enabled": false, "tesseract_cmd": ""}
+}
