@@ -5,7 +5,7 @@ import threading
 from typing import Any
 
 class MCPBridge:
-    """Cliente MCP stdio. No presupone que el servidor tenga nombres de herramientas fijos."""
+    """Cliente MCP stdio con un event loop persistente en segundo plano."""
     def __init__(self, command: str = "uvx", args: list[str] | None = None, env: dict[str, str] | None = None):
         self.command = command
         self.args = args or []
@@ -28,9 +28,10 @@ class MCPBridge:
         self._ready.clear()
         self._closed.clear()
         self._error = None
-        self._thread = threading.Thread(target=self._thread_main, daemon=True)
+        self._thread = threading.Thread(target=self._thread_main, daemon=True, name="NETLAB-MCP")
         self._thread.start()
         if not self._ready.wait(timeout):
+            self.disconnect()
             raise TimeoutError("Tiempo agotado al conectar con el servidor MCP.")
         if self._error:
             raise RuntimeError(str(self._error)) from self._error
@@ -40,6 +41,7 @@ class MCPBridge:
         asyncio.run(self._serve())
 
     async def _serve(self) -> None:
+        self._loop = asyncio.get_running_loop()
         try:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
@@ -56,18 +58,19 @@ class MCPBridge:
                     ]
                     self._ready.set()
                     while not self._closed.is_set():
-                        await asyncio.sleep(0.2)
-                    self._session = None
+                        await asyncio.sleep(0.15)
         except Exception as exc:
             self._error = exc
             self._ready.set()
         finally:
             self._session = None
+            self._loop = None
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None, timeout: int = 90) -> Any:
-        if not self.connected or self._loop is None:
+        if not self.connected or self._loop is None or self._session is None:
             raise RuntimeError("El puente MCP no está conectado.")
-        future = asyncio.run_coroutine_threadsafe(self._session.call_tool(name, arguments or {}), self._loop)
+        coroutine = self._session.call_tool(name, arguments or {})
+        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
         return future.result(timeout=timeout)
 
     def disconnect(self) -> None:
