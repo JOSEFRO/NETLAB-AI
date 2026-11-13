@@ -5,7 +5,7 @@ import threading
 from typing import Any
 
 class MCPBridge:
-    """Cliente MCP stdio con un event loop persistente en segundo plano."""
+    """Cliente MCP stdio; descubre herramientas y captura el canvas tras cada acción."""
     def __init__(self, command: str = "uvx", args: list[str] | None = None, env: dict[str, str] | None = None):
         self.command = command
         self.args = args or []
@@ -17,6 +17,8 @@ class MCPBridge:
         self._closed = threading.Event()
         self._error: Exception | None = None
         self.tools: list[dict[str, Any]] = []
+        self.last_capture_result: Any = None
+        self.last_capture_error: str | None = None
 
     @property
     def connected(self) -> bool:
@@ -25,9 +27,7 @@ class MCPBridge:
     def connect(self, timeout: int = 30) -> list[dict[str, Any]]:
         if self.connected:
             return self.tools
-        self._ready.clear()
-        self._closed.clear()
-        self._error = None
+        self._ready.clear(); self._closed.clear(); self._error = None
         self._thread = threading.Thread(target=self._thread_main, daemon=True, name="NETLAB-MCP")
         self._thread.start()
         if not self._ready.wait(timeout):
@@ -52,10 +52,7 @@ class MCPBridge:
                     self._session = session
                     await session.initialize()
                     response = await session.list_tools()
-                    self.tools = [
-                        {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema}
-                        for tool in response.tools
-                    ]
+                    self.tools = [{"name": t.name, "description": t.description or "", "inputSchema": t.inputSchema} for t in response.tools]
                     self._ready.set()
                     while not self._closed.is_set():
                         await asyncio.sleep(0.15)
@@ -66,11 +63,32 @@ class MCPBridge:
             self._session = None
             self._loop = None
 
-    def call_tool(self, name: str, arguments: dict[str, Any] | None = None, timeout: int = 90) -> Any:
+    def _tool_by_name(self, name: str) -> dict[str, Any] | None:
+        return next((tool for tool in self.tools if tool["name"] == name), None)
+
+    async def _capture_canvas(self) -> None:
+        tool = self._tool_by_name("pt_screenshot")
+        if not tool or self._session is None:
+            return
+        schema = tool.get("inputSchema") or {}
+        if schema.get("required"):
+            self.last_capture_error = "pt_screenshot requiere parámetros obligatorios; revisa su esquema."
+            return
+        try:
+            self.last_capture_result = await self._session.call_tool("pt_screenshot", {})
+            self.last_capture_error = None
+        except Exception as exc:
+            self.last_capture_error = str(exc)
+
+    def call_tool(self, name: str, arguments: dict[str, Any] | None = None, timeout: int = 90, capture_after: bool = True) -> Any:
         if not self.connected or self._loop is None or self._session is None:
             raise RuntimeError("El puente MCP no está conectado.")
-        coroutine = self._session.call_tool(name, arguments or {})
-        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        async def invoke():
+            result = await self._session.call_tool(name, arguments or {})
+            if capture_after and name not in {"pt_screenshot", "pt_ui_capture"}:
+                await self._capture_canvas()
+            return result
+        future = asyncio.run_coroutine_threadsafe(invoke(), self._loop)
         return future.result(timeout=timeout)
 
     def disconnect(self) -> None:
