@@ -1,9 +1,12 @@
 from __future__ import annotations
+import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from .workflow import PracticeWorkflow
 from .config import load_config
+from .mcp_client import MCPBridge
+from .evidence import desktop_capture, save_mcp_capture, create_evidence_dir
 
 BG = "#0b1220"
 PANEL = "#111c2e"
@@ -22,8 +25,10 @@ class NetLabApp(tk.Tk):
         self.configure(bg=BG)
         self.workflow = PracticeWorkflow()
         self.practice = None
+        self.mcp: MCPBridge | None = None
         self._style()
         self._build()
+        self.protocol("WM_DELETE_WINDOW", self._close)
 
     def _style(self):
         style = ttk.Style(self)
@@ -49,12 +54,9 @@ class NetLabApp(tk.Tk):
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True, padx=18, pady=(0, 14))
-        left = self._panel(body, 250)
-        left.pack(side="left", fill="y", padx=(0, 10))
-        center = self._panel(body)
-        center.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        right = self._panel(body, 270)
-        right.pack(side="right", fill="y")
+        left = self._panel(body, 250); left.pack(side="left", fill="y", padx=(0, 10))
+        center = self._panel(body); center.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        right = self._panel(body, 270); right.pack(side="right", fill="y")
 
         self._heading(left, "DOCUMENTO Y ACTIVIDADES")
         self.file_label = tk.Label(left, text="Ninguna práctica cargada", bg=PANEL, fg=MUTED, wraplength=220, justify="left")
@@ -85,8 +87,7 @@ class NetLabApp(tk.Tk):
 
     def _panel(self, parent, width=None):
         frame = tk.Frame(parent, bg=PANEL, highlightbackground="#24364e", highlightthickness=1, width=width or 0)
-        if width:
-            frame.pack_propagate(False)
+        if width: frame.pack_propagate(False)
         return frame
 
     def _heading(self, parent, text):
@@ -98,16 +99,14 @@ class NetLabApp(tk.Tk):
     def _draw_placeholder(self):
         self.canvas.delete("all")
         w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
-        if w < 50 or h < 50:
-            return
+        if w < 50 or h < 50: return
         self.canvas.create_text(w/2, h/2-40, text="ÁREA CENTRAL DE TOPOLOGÍA", fill=ACCENT, font=("Segoe UI", 15, "bold"))
         self.canvas.create_text(w/2, h/2, text="Conecta MCP y abre un laboratorio para visualizar Packet Tracer.", fill=MUTED, font=("Segoe UI", 10))
-        self.canvas.create_text(w/2, h/2+34, text="El panel central es una vista de trabajo; la topología real vive en Packet Tracer.", fill="#64748b", font=("Segoe UI", 8))
+        self.canvas.create_text(w/2, h/2+34, text="La vista central se conectará con la topología real de Packet Tracer.", fill="#64748b", font=("Segoe UI", 8))
 
     def import_file(self):
         path = filedialog.askopenfilename(title="Seleccionar práctica", filetypes=[("Documentos", "*.pdf *.docx *.txt *.md *.png *.jpg *.jpeg"), ("Todos", "*.*")])
-        if not path:
-            return
+        if not path: return
         try:
             self.practice = self.workflow.analyze(path)
             self.file_label.configure(text=Path(path).name)
@@ -118,49 +117,97 @@ class NetLabApp(tk.Tk):
             self.status.configure(text=f"Documento analizado: {len(self.practice.extracted_text)} caracteres")
             self.progress.configure(value=0)
             if not self.practice.activities:
-                messagebox.showwarning("Análisis", "Se extrajo el texto, pero no se detectaron preguntas o instrucciones numeradas. Revisa el documento.")
+                messagebox.showwarning("Análisis", "Se extrajo el texto, pero no se detectaron actividades numeradas. Revisa el documento.")
         except Exception as exc:
             messagebox.showerror("No se pudo leer el documento", str(exc))
 
     def show_activity(self, _event=None):
-        if not self.practice:
-            return
+        if not self.practice: return
         selection = self.activity_list.curselection()
-        if not selection:
-            return
+        if not selection: return
         item = self.practice.activities[selection[0]]
         self.detail_title.configure(text=f"{item.number}. {item.kind.title()}")
-        self.detail.configure(state="normal")
-        self.detail.delete("1.0", "end")
+        self.detail.configure(state="normal"); self.detail.delete("1.0", "end")
         self.detail.insert("1.0", f"{item.text}\n\nRespuesta:\n{item.answer or 'Pendiente de resolver.'}\n\nEstado: {item.status}\n\nEvidencias:\n" + "\n".join(item.evidence))
         self.detail.configure(state="disabled")
 
     def connect_mcp(self):
-        messagebox.showinfo("Conexión MCP", "La conexión MCP se configura en config/settings.json. Este primer corte incluye la interfaz y el analizador; el adaptador de ejecución se está preparando.")
-        self.connection.configure(text="● MCP por configurar", fg="#fbbf24")
+        cfg = load_config().get("mcp", {})
+        command = cfg.get("command", "uvx")
+        args = cfg.get("args", [])
+        self.status.configure(text="Conectando con el servidor MCP…")
+        self.connection.configure(text="● Conectando…", fg="#fbbf24")
+        def worker():
+            try:
+                bridge = MCPBridge(command, args, cfg.get("env") or None)
+                tools = bridge.connect(timeout=int(cfg.get("connect_timeout_seconds", 30)))
+                self.after(0, lambda: self._mcp_connected(bridge, tools))
+            except Exception as exc:
+                self.after(0, lambda error=str(exc): self._mcp_failed(error))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _mcp_connected(self, bridge, tools):
+        self.mcp = bridge
+        self.connection.configure(text=f"● MCP conectado · {len(tools)} herramientas", fg=GREEN)
+        self.status.configure(text="Servidor MCP conectado. Herramientas descubiertas dinámicamente.")
+        names = ", ".join(t["name"] for t in tools[:8])
+        self.detail.configure(state="normal"); self.detail.delete("1.0", "end")
+        self.detail.insert("1.0", "Herramientas MCP detectadas:\n" + names + ("…" if len(tools) > 8 else ""))
+        self.detail.configure(state="disabled")
+
+    def _mcp_failed(self, error):
+        self.connection.configure(text="● MCP sin conexión", fg="#f87171")
+        self.status.configure(text=f"Error de conexión MCP: {error}")
+        messagebox.showerror("No se pudo conectar", error)
 
     def capture_screen(self):
-        from .evidence import desktop_capture
-        from pathlib import Path
         cfg = load_config()
-        folder = Path(cfg["workspace"]) / (Path(self.practice.source_file).stem if self.practice else "capturas") / "evidencias"
-        folder.mkdir(parents=True, exist_ok=True)
-        result = desktop_capture(folder, "pantalla")
-        if result:
-            if self.practice:
-                self.practice.activities[0].evidence.append(result) if self.practice.activities else None
-            self.status.configure(text=f"Captura guardada: {result}")
-            messagebox.showinfo("Captura guardada", result)
+        workspace = Path(cfg["workspace"])
+        name = Path(self.practice.source_file).stem if self.practice else "capturas"
+        folder = create_evidence_dir(workspace, name)
+        self.status.configure(text="Solicitando captura…")
+        def worker():
+            saved = []
+            errors = []
+            if self.mcp and self.mcp.connected:
+                candidates = [t for t in self.mcp.tools if any(k in t["name"].lower() for k in ("screenshot", "ui_capture", "capture"))]
+                for tool in candidates:
+                    schema = tool.get("inputSchema") or {}
+                    required = (schema.get("required") or [])
+                    if required: continue
+                    try:
+                        result = self.mcp.call_tool(tool["name"], {})
+                        saved.extend(save_mcp_capture(result, folder, tool["name"]))
+                        if saved: break
+                    except Exception as exc:
+                        errors.append(str(exc))
+            if not saved and cfg.get("capture", {}).get("fallback_screenshot", True):
+                fallback = desktop_capture(folder, "pantalla_packet_tracer")
+                if fallback: saved.append(fallback)
+            self.after(0, lambda: self._capture_done(saved, errors))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _capture_done(self, saved, errors):
+        if saved:
+            if self.practice and self.practice.activities:
+                self.practice.activities[0].evidence.extend(saved)
+            self.status.configure(text=f"Captura/evidencia guardada: {saved[0]}")
+            messagebox.showinfo("Evidencia guardada", "\n".join(saved[:4]))
         else:
-            messagebox.showwarning("Captura", "No se pudo capturar la pantalla. Comprueba los permisos y PyAutoGUI.")
+            self.status.configure(text="No se obtuvo captura. Revisa la conexión y permisos.")
+            messagebox.showwarning("Captura", "No se pudo obtener una imagen. " + ("; ".join(errors[:2]) if errors else "Verifica la configuración MCP y PyAutoGUI."))
 
     def export_report(self):
         if not self.practice:
-            messagebox.showwarning("Informe", "Primero importa una práctica.")
-            return
+            messagebox.showwarning("Informe", "Primero importa una práctica."); return
         try:
             folder = self.workflow.export(self.practice)
             self.status.configure(text=f"Informe generado en {folder}")
             messagebox.showinfo("Informe generado", str(folder / "informe.pdf"))
         except Exception as exc:
             messagebox.showerror("Error al generar informe", str(exc))
+
+    def _close(self):
+        if self.mcp:
+            self.mcp.disconnect()
+        self.destroy()
