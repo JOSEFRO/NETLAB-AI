@@ -26,6 +26,9 @@ class NetLabApp(tk.Tk):
         self.workflow = PracticeWorkflow()
         self.practice = None
         self.mcp: MCPBridge | None = None
+        self._topology_phase = 0.0
+        self._topology_job = None
+        self._pulse_items = []
         self._style()
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -97,12 +100,55 @@ class NetLabApp(tk.Tk):
         return tk.Button(parent, text=text, command=command, bg=PANEL2 if secondary else "#a93850", fg=TEXT, activebackground="#d64b65", activeforeground="white", relief="flat", bd=0, padx=14, pady=9, font=("Segoe UI", 9, "bold"), cursor="hand2")
 
     def _draw_placeholder(self):
+        if self._topology_job:
+            try:
+                self.after_cancel(self._topology_job)
+            except tk.TclError:
+                pass
+            self._topology_job = None
         self.canvas.delete("all")
+        self._pulse_items = []
         w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
-        if w < 50 or h < 50: return
-        self.canvas.create_text(w/2, h/2-40, text="ÁREA CENTRAL DE TOPOLOGÍA", fill=ACCENT, font=("Segoe UI", 15, "bold"))
-        self.canvas.create_text(w/2, h/2, text="Conecta MCP y abre un laboratorio para visualizar Packet Tracer.", fill=MUTED, font=("Segoe UI", 10))
-        self.canvas.create_text(w/2, h/2+34, text="La vista central se conectará con la topología real de Packet Tracer.", fill="#64748b", font=("Segoe UI", 8))
+        if w < 50 or h < 50:
+            return
+        # Decorative standby topology only. Live devices must come from MCP data.
+        points = [
+            (w * .16, h * .50, "ROUTER"),
+            (w * .39, h * .27, "SW-01"),
+            (w * .39, h * .73, "SW-02"),
+            (w * .68, h * .27, "HOST-01"),
+            (w * .68, h * .73, "HOST-02"),
+            (w * .86, h * .50, "SERVER"),
+        ]
+        edges = [(0, 1), (0, 2), (1, 2), (1, 3), (2, 4), (3, 5), (4, 5)]
+        for x in range(24, int(w), 34):
+            self.canvas.create_line(x, 0, x, h, fill="#0d2436", tags=("grid",))
+        for y in range(20, int(h), 34):
+            self.canvas.create_line(0, y, w, y, fill="#0d2436", tags=("grid",))
+        for edge_index, (a, b) in enumerate(edges):
+            x1, y1, _ = points[a]
+            x2, y2, _ = points[b]
+            self.canvas.create_line(x1, y1, x2, y2, fill="#28506a", width=2, tags=("network-edge",))
+            pulse = self.canvas.create_oval(x1-4, y1-4, x1+4, y1+4, fill=ACCENT, outline="", tags=("network-pulse",))
+            self._pulse_items.append((pulse, x1, y1, x2, y2, edge_index / max(1, len(edges))))
+        for index, (x, y, label) in enumerate(points):
+            self.canvas.create_oval(x-19, y-19, x+19, y+19, fill="#102b40", outline="#4c91aa", width=2)
+            self.canvas.create_oval(x-7, y-7, x+7, y+7, fill="#8fe8e7" if index == 0 else "#80b9d0", outline="")
+            self.canvas.create_text(x, y+31, text=label, fill="#b7d4e2", font=("Segoe UI", 8, "bold"))
+        self.canvas.create_text(18, 18, anchor="nw", text="VISTA ILUSTRATIVA · MCP SIN CONEXIÓN", fill="#d7b77f", font=("Segoe UI", 8, "bold"))
+        self.canvas.create_text(w/2, h-24, text="La topología real aparecerá cuando la integración MCP entregue dispositivos y enlaces.", fill=MUTED, font=("Segoe UI", 8))
+        self._animate_topology()
+
+    def _animate_topology(self):
+        if not self.winfo_exists():
+            return
+        self._topology_phase = (self._topology_phase + 0.018) % 1.0
+        for item, x1, y1, x2, y2, offset in self._pulse_items:
+            t = (self._topology_phase + offset) % 1.0
+            x = x1 + (x2 - x1) * t
+            y = y1 + (y2 - y1) * t
+            self.canvas.coords(item, x-4, y-4, x+4, y+4)
+        self._topology_job = self.after(55, self._animate_topology)
 
     def import_file(self):
         path = filedialog.askopenfilename(title="Seleccionar práctica", filetypes=[("Documentos", "*.pdf *.docx *.txt *.md *.png *.jpg *.jpeg"), ("Todos", "*.*")])
@@ -208,6 +254,12 @@ class NetLabApp(tk.Tk):
             messagebox.showerror("Error al generar informe", str(exc))
 
     def _close(self):
+        if self._topology_job:
+            try:
+                self.after_cancel(self._topology_job)
+            except tk.TclError:
+                pass
+            self._topology_job = None
         if self.mcp:
             self.mcp.disconnect()
         self.destroy()
