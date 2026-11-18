@@ -8,13 +8,13 @@ from .config import load_config
 from .mcp_client import MCPBridge
 from .evidence import desktop_capture, save_mcp_capture, create_evidence_dir
 
-BG = "#0b1220"
-PANEL = "#111c2e"
-PANEL2 = "#17243a"
-TEXT = "#e5edf8"
-MUTED = "#91a3bb"
-ACCENT = "#38bdf8"
-GREEN = "#34d399"
+BG = "#070b14"
+PANEL = "#101b2c"
+PANEL2 = "#15263b"
+TEXT = "#f1f5fb"
+MUTED = "#91a8bd"
+ACCENT = "#79e2e8"
+GREEN = "#78e2b7"
 
 class NetLabApp(tk.Tk):
     def __init__(self):
@@ -86,7 +86,7 @@ class NetLabApp(tk.Tk):
         self.status.pack(fill="x", side="bottom")
 
     def _panel(self, parent, width=None):
-        frame = tk.Frame(parent, bg=PANEL, highlightbackground="#24364e", highlightthickness=1, width=width or 0)
+        frame = tk.Frame(parent, bg=PANEL, highlightbackground="#29465d", highlightthickness=1, width=width or 0)
         if width: frame.pack_propagate(False)
         return frame
 
@@ -94,7 +94,7 @@ class NetLabApp(tk.Tk):
         tk.Label(parent, text=text, bg=PANEL, fg=ACCENT, font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=14, pady=(14, 4))
 
     def _button(self, parent, text, command, secondary=False):
-        return tk.Button(parent, text=text, command=command, bg=PANEL2 if secondary else "#075985", fg=TEXT, activebackground="#0e7490", activeforeground="white", relief="flat", bd=0, padx=14, pady=9, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        return tk.Button(parent, text=text, command=command, bg=PANEL2 if secondary else "#a93850", fg=TEXT, activebackground="#d64b65", activeforeground="white", relief="flat", bd=0, padx=14, pady=9, font=("Segoe UI", 9, "bold"), cursor="hand2")
 
     def _draw_placeholder(self):
         self.canvas.delete("all")
