@@ -1,5 +1,9 @@
 # NETLAB AI
 
+<p align="center"><img src="https://d8j0ntlcm91z4.cloudfront.net/user_3MJ8xX039ib9919oo3CFVd7NjMx/hf_20261119_141651_aa8abd62-3c82-434a-b8d9-9b5d4a5e0d60.webp" alt="Ilustración conceptual del laboratorio de redes y automatización NETLAB AI" width="100%"></p>
+
+> **Arte conceptual de presentación generado para este repositorio.** No es una captura real de la aplicación ni demuestra una integración Packet Tracer/MCP ya operativa.
+
 **Asistente de laboratorios de redes en español** para analizar prácticas, organizar preguntas e instrucciones, trabajar con Cisco Packet Tracer mediante MCP, recopilar evidencias y generar informes.
 
 > Estado: prototipo inicial en desarrollo. La integración con Packet Tracer debe configurarse y probarse localmente; no se afirma que el despliegue automático esté validado todavía.
